@@ -7,6 +7,7 @@ from scipy.linalg import block_diag
 from scipy.spatial.distance import cityblock
 import rospy
 import tf2_ros
+from skimage.draw import circle
 
 # msgs
 from geometry_msgs.msg import TransformStamped, Twist, PoseStamped
@@ -23,7 +24,7 @@ TRANS_VEL_OPTS = [0, 0.025, 0.13, 0.26]  # m/s, max of real robot is .26
 ROT_VEL_OPTS = np.linspace(-1.82, 1.82, 11)  # rad/s, max of real robot is 1.82
 CONTROL_RATE = 5  # Hz, how frequently control signals are sent
 CONTROL_HORIZON = 5  # seconds. if this is set too high and INTEGRATION_DT is too low, code will take a long time to run!
-INTEGRATION_DT = .025  # s, delta t to propagate trajectories forward by
+INTEGRATION_DT = 1#.025  # s, delta t to propagate trajectories forward by
 COLLISION_RADIUS = 0.225  # m, radius from base_link to use for collisions, min of 0.2077 based on dimensions of .281 x .306
 ROT_DIST_MULT = .1  # multiplier to change effect of rotational distance in choosing correct control
 OBS_DIST_MULT = .1  # multiplier to change the effect of low distance to obstacles on a path
@@ -31,8 +32,8 @@ MIN_TRANS_DIST_TO_USE_ROT = TRANS_GOAL_TOL  # m, robot has to be within this dis
 PATH_NAME = 'path.npy'  # saved path from l2_planning.py, should be in the same directory as this file
 
 # here are some hardcoded paths to use if you want to develop l2_planning and this file in parallel
-# TEMP_HARDCODE_PATH = [[2, 0, 0], [2.75, -1, -np.pi/2], [2.75, -4, -np.pi/2], [2, -4.4, np.pi]]  # almost collision-free
-TEMP_HARDCODE_PATH = [[2, -.5, 0], [2.4, -1, -np.pi/2], [2.45, -3.5, -np.pi/2], [1.5, -4.4, np.pi]]  # some possible collisions
+TEMP_HARDCODE_PATH = [[2, 0, 0], [2.75, -1, -np.pi/2], [2.75, -4, -np.pi/2], [2, -4.4, np.pi]]  # almost collision-free
+#TEMP_HARDCODE_PATH = [[2, -.5, 0], [2.4, -1, -np.pi/2], [2.45, -3.5, -np.pi/2], [1.5, -4.4, np.pi]]  # some possible collisions
 
 
 class PathFollower():
@@ -124,21 +125,145 @@ class PathFollower():
             # start trajectory rollout algorithm
             local_paths = np.zeros([self.horizon_timesteps + 1, self.num_opts, 3])
             local_paths[0] = np.atleast_2d(self.pose_in_map_np).repeat(self.num_opts, axis=0)
-
-            print("TO DO: Propogate the trajectory forward, storing the resulting points in local_paths!")
+            #print(local_paths)
+            #print("TO DO: Propogate the trajectory forward, storing the resulting points in local_paths!")
+            caught = False
             for t in range(1, self.horizon_timesteps + 1):
-                # propogate trajectory forward, assuming perfect control of velocity and no dynamic effects
-                pass
+                # propogate trajectory forward, assuming perfect control of velocity and no dynamic effects. #We have pose (self.pose_in_map_np) and we have vels from rows in self.all_opts
+                #[[translation vel, roational vel]]
+                #Local paths is a #of timesteps by #of vel rows by 3 (for points) matrix
+                #horizon time steps are the number of timesteps we are propagating for. Therefore we come up with that amount of points along the trajectory
+                #pose is stored in self.pose_in_map_np as [x,y,theta]
 
+                for u in range(0,self.num_opts): #for each row of the all_opts matrix
+                    #Get point in last time frame
+                    x0 = local_paths[t-1,u,0]
+                    y0 = local_paths[t-1,u,1]
+                    the0 = local_paths[t-1,u,2]
+
+
+                    #Get velocities
+                    v = self.all_opts[u,0]
+                    w = self.all_opts[u,1]
+
+                    dt = INTEGRATION_DT
+
+                    # if u == 0 and t == 1:
+                    #     print(x0)
+                    #     print(y0)
+                    #     print(the0)
+
+                    if abs(w - 0) < 1e-8: #If no rotationa component
+                        # drive on a straight line
+                        xt = v * dt * np.math.cos(the0)
+                        yt = v * dt * np.math.sin(the0)
+                        thet = 0
+
+                    elif abs(v - 0) < 1e-8: #If no translational component
+                        #rotate on the spot
+                        xt = 0
+                        yt = 0
+                        thet = w*dt
+
+                    else:
+                        #Calculate values used multiple times
+                        radius = abs(v/w)
+                        substep_arc = abs(v) * dt
+                        substep_angle = substep_arc/radius
+
+                        #These deal with the whole CAST quadrant thing
+                        forward = v > 0
+                        upward = (v > 0) == (w > 0)
+                        heading_upward = w > 0
+
+                        #Displacement in world coordinates (inertial reference frame) after time step dt
+                        xt = radius * np.math.sin(substep_angle * t)
+                        yt = radius * (1 - np.math.cos(substep_angle * t))
+                        thet = substep_angle * t
+
+                        #Dealing with the whole CAST thing regarding sin and cos
+                        if not forward:
+                            xt = -1 * xt
+                        if not upward:
+                            yt = -1 * yt
+                        if not heading_upward:
+                            thet = -1 * thet
+                    
+                    #debugging
+                    # if(np.isnan(xt) and not caught):
+                    #     caught = True
+                    #     print("u: ",u)
+                    #     print("t: ",t)
+                    # elif(np.isnan(yt) and not caught):
+                    #     caught = True
+                    #     print("u: ",u)
+                    #     print("t: ",t)
+                    # elif(np.isnan(thet) and not caught):
+                    #     caught = True
+                    #     print("u: ",u)
+                    #     print("t: ",t)
+
+                    #Add displacement in world coordinates with initial conditions (last time step)
+                    xt = x0 + xt
+                    yt = y0 + yt
+                    thet = the0 + thet
+
+                    #Set local path
+                    local_paths[t,u,0] = xt
+                    local_paths[t,u,1] = yt
+                    local_paths[t,u,2] = thet
+
+                    
+            #print(local_paths)
             # check all trajectory points for collisions
             # first find the closest collision point in the map to each local path point
             local_paths_pixels = (self.map_origin[:2] + local_paths[:, :, :2]) / self.map_resolution
             valid_opts = range(self.num_opts)
             local_paths_lowest_collision_dist = np.ones(self.num_opts) * 50
 
-            print("TO DO: Check the points in local_path_pixels for collisions")
+            #print(np.shape(self.map_np))
+            #print(local_paths_pixels)
+            #print(self.map_nonzero_idxes)
+            #print("TO DO: Check the points in local_path_pixels for collisions")
             for opt in range(local_paths_pixels.shape[1]):
                 for timestep in range(local_paths_pixels.shape[0]):
+                    found = False
+                    #We have x y pixel values in local_paths_pixels
+                    #Valid_opts is a vector counting to the number of available trajectories
+                    #We want to save the lowest collision distance out of all of the trajectory points in local_paths_lowest_collision_dist
+                    #Where are the map pixels stored? 0s are obstacles in self.map_np 1600 by 1600 matrix. 
+                    #self.collision_radius_pix is the minimum radius to avoid collision
+                    #self.map_nonzero_idxes contains a matrix whose rows [x y] correspond to the pixels where there is an obstacle.
+
+                    #First get pixel point
+                    xp = int(local_paths_pixels[timestep,opt,0])
+                    yp = int(local_paths_pixels[timestep,opt,1])
+
+                    #radius to check
+                    r = self.collision_radius_pix
+                    r = int(r)
+                    
+
+                    #generate pixel points within circle
+                    xcirc, ycirc = circle(xp,yp,r)
+                    circlepoints = np.array([xcirc,ycirc]).T
+                    #numOfCirclePoints = circlepoints.shape(0) #number of rows
+
+                    obstaclelist = self.map_nonzero_idxes
+
+                    for cp in circlepoints: #for each row in circlepoints
+                        if any(np.equal(obstaclelist,cp).all(1)): #Check if there is a collsion within radius
+                            found = True
+                            break
+
+                    if found == True: #if so break and remove current opt from valid_opts
+                        #remove current opt from list of valid 
+                        print("break")
+                        break
+                
+                    
+
+
                     pass
 
             # remove trajectories that were deemed to have collisions
