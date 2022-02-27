@@ -540,11 +540,7 @@ class PathPlanner:
         if self.traj_has_collision(robot_traj_pts):
             return False, None
         else:
-            #no collision -> calculate the correct heading, and return
-            
-            #call update here?
-            #update_children(node_i)?
-            
+            #no collision -> calculate the correct heading, and return 
             robot_traj_pts[2, :] = (theta_i_w + robot_traj_pts[2, :]) % np.math.pi
             return True, robot_traj_pts
 
