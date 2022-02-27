@@ -541,6 +541,10 @@ class PathPlanner:
             return False, None
         else:
             #no collision -> calculate the correct heading, and return
+            
+            #call update here?
+            #update_children(node_i)?
+            
             robot_traj_pts[2, :] = (theta_i_w + robot_traj_pts[2, :]) % np.math.pi
             return True, robot_traj_pts
 
@@ -551,12 +555,54 @@ class PathPlanner:
     
     def cost_to_come(self, trajectory_o):
         #The cost to get to a node from lavalle 
-        print("TO DO: Implement a cost to come metric")
-        return 0
+        #print("TO DO: Implement a cost to come metric")
+
+        traj = trajectory_o
+        eudist = 0 #euclidean distance
+        
+        for i in range(0, traj.shape[1]-1): #iterate through number of columns
+            eudist += np.linalg.norm(traj[:,i][0:2] - traj[:,i+1][0:2]) #calculate euclidean norm between trajectory points
+        
+        #print('eudist')
+        return eudist
     
     def update_children(self, node_id):
         #Given a node_id with a changed cost, update all connected nodes with the new cost
-        print("TO DO: Update the costs of connected nodes after rewiring.")
+        #print("TO DO: Update the costs of connected nodes after rewiring.")
+        
+        #can use a queue for Breadth first search traversal
+        #source: https://www.educative.io/edpresso/how-to-implement-a-breadth-first-search-in-python
+
+        #initialize queue of node ids
+        queue = np.array([])
+
+        #redundant visited node list
+        visited = np.array([])
+
+        #push node_id given
+        queue = np.append(queue,node_id)
+        visited = np.append(visited,node_id)
+
+        #queue list isnt empty (visited all the children nodes)
+        while queue.size != 0:
+            #take explored nodeID as an Int
+            nodeID = int(queue[0])
+
+            print(queue.size)
+            print(nodeID)
+            #pop explored node
+            queue = queue[1:]
+
+            for childID in self.nodes[nodeID].children_ids:
+                if childID not in visited: #redundancy
+                    #push node to visitied and queue list
+                    visited = np.append(visited,childID)
+                    queue = np.append(queue,childID)
+
+                    #update cost of children with euclidean distance
+                    dist = np.linalg.norm(self.nodes[nodeID].point[0:2]-self.nodes[childID].point[0:2])
+                    self.nodes[childID].cost = self.nodes[nodeID].cost + dist
+        
         return
 
     #Planner Functions
@@ -613,13 +659,20 @@ class PathPlanner:
             else:
                 # add the final point of the trajectory
                 parent_id = closest_node_id
-                cost = trans_vel * self.traj_time
+                
+                cost = trans_vel * self.traj_time #old cost, Needs to be fixed
+                
+                #cost = self.cost_to_come(trajectory_o) #update cost to come using trajectory? - AK WROMG
+                
                 new_node = trajectory_o[:, [-1]]
                 new_node_cell = self.point_to_cell(new_node[:2,[0]])
 
                 # only add nodes that are not duplicated, this method is much faster (though less accurate) than the check_if_duplicate function
                 if self.visitted_locations[new_node_cell[1,0], new_node_cell[0,0]] == 0:
                     # not yet visitted
+                    
+                    self.nodes[parent_id].children_ids.append(len(self.nodes)) #update children ids - AK
+                    
                     self.nodes.append(Node(new_node, parent_id, cost))
                     self.node_dist_scaling.append(1)
                     self.visitted_locations[new_node_cell[1,0], new_node_cell[0,0]] = 1
@@ -724,9 +777,9 @@ def main():
     # print(path_planner.points_to_robot_circle(test_array))    
     
     #### part 2 unit test
-    # node_i = np.array([[2], [1], [np.math.pi/2]])
-    # point_s = np.array([[0], [3]])
-    # path_planner.simulate_trajectory(node_i, point_s)
+    node_i = np.array([[2], [1], [np.math.pi/2]])
+    point_s = np.array([[0], [3]])
+    path_planner.simulate_trajectory(node_i, point_s)
     
     #### part 3 unit test
     # path_planner.nodes.append(Node(np.array([[1], [0], [0]]), -1, 0))
