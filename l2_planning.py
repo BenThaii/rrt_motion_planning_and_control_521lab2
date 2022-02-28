@@ -44,7 +44,7 @@ class PathPlanner:
         except:
             self.occupancy_map = load_map(map_filename)
 
-        # self.occupancy_map = np.ones((1600,1600))
+        self.occupancy_map = np.ones((1600,1600))
         self.map_shape = self.occupancy_map.shape
         self.map_settings_dict = load_map_yaml(map_setings_filename)
 
@@ -384,14 +384,15 @@ class PathPlanner:
 
 
     
-    def robot_controller_exact(self, node_i, point_s):
+    def robot_controller_exact(self, node_i, point_s, max_vel_enforced = True):
         #This controller determines the velocities that will nominally move the robot from node i to node s
         #Max velocities should be enforced
         # print("TO DO: Implement a control scheme to drive you towards the sampled point")
         
         # Responsible: Ben
-        # calculate radius of motion, or straight line along x-axis -> determine velocities exactly analytically, with constraints enforced on both velocities
-
+        # calculate radius of motion, or straight line along x-axis -> determine velocities exactly analytically so that:
+            # if max_vel_enforced == False: reach point_s after selftraj_time
+            # if max_vel_enforced == True: travel along the trajectory that ends at point_s, but may not reach point_s
         x_i = node_i[0,0]
         y_i = node_i[1,0]
 
@@ -406,7 +407,10 @@ class PathPlanner:
             else:
                 # try to get to the goal location after all substeps
                 ideal_trans_vel = (x_s - x_i) / self.traj_time
-                return np.clip(ideal_trans_vel, -self.vel_max, self.vel_max), 0
+                if max_vel_enforced:
+                    return np.clip(ideal_trans_vel, -self.vel_max, self.vel_max), 0
+                else:
+                    return ideal_trans_vel, 0
         elif abs(x_s - x_i) <  self.coord_error_tolerance:
             # goal is perpendicular to the current viable robot path -> use circular path
             # this is a special case due to the perpenducularity
@@ -420,12 +424,16 @@ class PathPlanner:
             
         arc_length = arc_angle * radius     # may be negative if the robot has to move backward
         ideal_trans_vel = arc_length/ self.traj_time
-        viable_trans_vel =  np.clip(ideal_trans_vel, -self.vel_max, self.vel_max)
+
+        if max_vel_enforced:
+            viable_trans_vel =  np.clip(ideal_trans_vel, -self.vel_max, self.vel_max)
+        else:
+            viable_trans_vel = ideal_trans_vel
 
         trans_vel_mag = abs(viable_trans_vel)
         forward = viable_trans_vel > 0
         rot_vel_mag = trans_vel_mag/radius
-        if rot_vel_mag > self.rot_vel_max:
+        if max_vel_enforced and (rot_vel_mag > self.rot_vel_max):
             rot_vel_mag =  np.clip(rot_vel_mag, 0, self.rot_vel_max)
             trans_vel_mag = rot_vel_mag * radius
 
@@ -442,7 +450,7 @@ class PathPlanner:
 
 
     
-    def trajectory_rollout(self, vel, rot_vel):           
+    def trajectory_rollout(self, vel, rot_vel, num_steps = None):           
         # Given your chosen velocities determine the trajectory of the robot for your given timestep
         # The returned trajectory should be a series of points to check for collisions
         # print("TO DO: Implement a way to rollout the controls chosen")
@@ -450,10 +458,13 @@ class PathPlanner:
         # Responsible: Ben
         # assume the robot is initially positioned along the x-axis at the origin. pose = [0,0,0]
 
-        traj_points = np.zeros((3, self.num_substeps))
+        if num_steps == None:
+            num_steps = self.num_substeps
+
+        traj_points = np.zeros((3, num_steps))
         if abs(rot_vel - 0) < self.coord_error_tolerance:
             # drive on a straight line
-            traj_points[0,:] = vel * range(1, self.num_substeps + 1)
+            traj_points[0,:] = vel * range(1, num_steps + 1)
         else:
             radius = abs(vel/rot_vel)
             substep_arc = abs(vel) * self.timestep
@@ -463,7 +474,7 @@ class PathPlanner:
             heading_upward = rot_vel > 0
 
             # calcualate the exact position of the robot (not through linearization)
-            for t in range(1, self.num_substeps + 1):
+            for t in range(1, num_steps + 1):
                 traj_points[0, t-1] = radius * np.math.sin(substep_angle * t)
                 traj_points[1, t-1] = radius * (1 - np.math.cos(substep_angle * t))
                 traj_points[2, t-1] = substep_angle * t
@@ -513,13 +524,17 @@ class PathPlanner:
         card_V = len(self.nodes)
         return min(self.gamma_RRT * (np.log(card_V) / card_V ) ** (1.0/2.0), self.epsilon)
     
-    def connect_node_to_point(self, node_i, point_f):
+    def connect_node_to_point(self, node_i, point_f, checkCollision = True):
         #Given two nodes find the non-holonomic path that connects them
         #Settings
         #node is a 3 by 1 node
         #point is a 2 by 1 point
 
         # Responsible: Ben
+        # output:
+            #1. CollisionFreePathExists
+            #2. collision free trajectory
+            #3. trajectory length
 
         # convert to node_i's frame for easier velocities and trajectory rollout calculation
         theta_i_w = node_i[2, 0]
@@ -531,19 +546,35 @@ class PathPlanner:
         node_i_i = np.zeros((3, 1))
         point_f_i_aug = np.matmul(T_i_w,  np.vstack((point_f, 1)))
         point_f_i = point_f_i_aug[:2]
+        node_f_i = point_f_i_aug.copy()
 
-        vel, rot_vel = self.robot_controller_exact(node_i_i, point_f_i)
-        robot_traj_i = self.trajectory_rollout(vel, rot_vel)
+        vel, rot_vel = self.robot_controller_exact(node_i_i, point_f_i, max_vel_enforced= False)
+
+        total_traj_length = vel * self.traj_time
+        
+        num_traj_points = int(np.math.floor(total_traj_length/self.max_dist_per_step))
+
+        robot_traj_i = self.trajectory_rollout(vel, rot_vel, num_traj_points)
+
+        
+
+        node_f_i[2, 0] = rot_vel * self.traj_time           # angle of goal point
+        robot_traj_i = np.hstack((robot_traj_i, node_f_i))  # add goal point to the trajectory (goal point is most likely excluded)
+        num_traj_points += 1
         
         # convert back to world coordinate for collision detection
-        robot_traj_pts = np.matmul(T_w_i, np.vstack((robot_traj_i[:2, :], np.ones((1, self.num_substeps)))))      # convert x,y coord from frame i to world frame
-        if self.traj_has_collision(robot_traj_pts):
-            return False, None
+        robot_traj_pts = np.matmul(T_w_i, np.vstack((robot_traj_i[:2, :], np.ones((1, num_traj_points)))))      # convert x,y coord from frame i to world frame
+        
+        if checkCollision:
+            if self.traj_has_collision(robot_traj_pts):
+                return False, None, None
+            else:
+                #no collision -> calculate the correct heading, and return
+                
+                robot_traj_pts[2, :] = (theta_i_w + robot_traj_pts[2, :]) % np.math.pi
+                return True, robot_traj_pts, total_traj_length
         else:
-            #no collision -> calculate the correct heading, and return
-            
-            robot_traj_pts[2, :] = (theta_i_w + robot_traj_pts[2, :]) % np.math.pi
-            return True, robot_traj_pts
+            return True, robot_traj_pts, total_traj_length
 
 
         # Ben: i dont think we can just return the trajectory, because trajectory may not exist
@@ -554,14 +585,20 @@ class PathPlanner:
         #The cost to get to a node from lavalle 
         #print("TO DO: Implement a cost to come metric")
 
-        traj = trajectory_o
-        eudist = 0 #euclidean distance
+        # traj = trajectory_o
+        # eudist = 0 #euclidean distance
         
-        for i in range(0, traj.shape[1]-1): #iterate through number of columns
-            eudist += np.linalg.norm(traj[:,i][0:2] - traj[:,i+1][0:2]) #calculate euclidean norm between trajectory points
-        
+        # for i in range(0, traj.shape[1]-1): #iterate through number of columns
+        #     eudist += np.linalg.norm(traj[:,i][0:2] - traj[:,i+1][0:2]) #calculate euclidean norm between trajectory points
         #print('eudist')
-        return eudist
+        # return eudist
+
+        # Ben: this should return the cost of travel between 2 nodes. 
+        # assumption: enforce the theta constraint for the origin node, not that of the destination node -> multiple solution exists; experiment further if necessary
+        
+        _, _, cost = self.connect_node_to_point(trajectory_o[:, [0]], trajectory_o[:2, [1]], checkCollision=False)
+
+        return cost
     
     def update_children(self, node_id):
         #Given a node_id with a changed cost, update all connected nodes with the new cost
@@ -657,7 +694,8 @@ class PathPlanner:
                 # add the final point of the trajectory
                 parent_id = closest_node_id
                 
-                cost = trans_vel * self.traj_time #old cost, Needs to be fixed
+                most_recent_cost = trans_vel * self.traj_time #old cost, Needs to be fixed
+                cost = self.nodes[parent_id].cost + most_recent_cost
                 
                 #cost = self.cost_to_come(trajectory_o) #update cost to come using trajectory? - AK WROMG
                 
@@ -786,6 +824,12 @@ def main():
     # print(path_planner.closest_node(np.array([[0], [1]])))
     # print(path_planner.closest_node(np.array([[1.5], [0]])))
 
+    A = np.zeros((3,1))
+    B = np.zeros((3,1))
+    B[0, 0] = 2
+    B[1, 0] = 2
+    C = np.hstack((A,B))
+    path_planner.cost_to_come(C)
 
     start = time.time()
     nodes = path_planner.rrt_planning()
