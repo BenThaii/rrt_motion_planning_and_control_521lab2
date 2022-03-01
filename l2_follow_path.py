@@ -24,7 +24,7 @@ TRANS_VEL_OPTS = [0, 0.025, 0.13, 0.26]  # m/s, max of real robot is .26
 ROT_VEL_OPTS = np.linspace(-1.82, 1.82, 11)  # rad/s, max of real robot is 1.82
 CONTROL_RATE = 5  # Hz, how frequently control signals are sent
 CONTROL_HORIZON = 5  # seconds. if this is set too high and INTEGRATION_DT is too low, code will take a long time to run!
-INTEGRATION_DT = 1#.025  # s, delta t to propagate trajectories forward by
+INTEGRATION_DT = .025  # s, delta t to propagate trajectories forward by
 COLLISION_RADIUS = 0.225  # m, radius from base_link to use for collisions, min of 0.2077 based on dimensions of .281 x .306
 ROT_DIST_MULT = .1  # multiplier to change effect of rotational distance in choosing correct control
 OBS_DIST_MULT = .1  # multiplier to change the effect of low distance to obstacles on a path
@@ -86,8 +86,8 @@ class PathFollower():
         cur_dir = os.path.dirname(os.path.realpath(__file__))
 
         # to use the temp hardcoded paths above, switch the comment on the following two lines
-        self.path_tuples = np.load(os.path.join(cur_dir, 'path.npy')).T
-        # self.path_tuples = np.array(TEMP_HARDCODE_PATH)
+        #self.path_tuples = np.load(os.path.join(cur_dir, 'path.npy')).T
+        self.path_tuples = np.array(TEMP_HARDCODE_PATH)
 
         self.path = utils.se2_pose_list_to_path(self.path_tuples, 'map')
         self.global_path_pub.publish(self.path)
@@ -125,11 +125,11 @@ class PathFollower():
             # start trajectory rollout algorithm
             local_paths = np.zeros([self.horizon_timesteps + 1, self.num_opts, 3])
             local_paths[0] = np.atleast_2d(self.pose_in_map_np).repeat(self.num_opts, axis=0)
-            #print(local_paths)
-            #print("TO DO: Propogate the trajectory forward, storing the resulting points in local_paths!")
-            caught = False
+
+            print("TO DO: Propogate the trajectory forward, storing the resulting points in local_paths!")
             for t in range(1, self.horizon_timesteps + 1):
-                # propogate trajectory forward, assuming perfect control of velocity and no dynamic effects. #We have pose (self.pose_in_map_np) and we have vels from rows in self.all_opts
+				# propogate trajectory forward, assuming perfect control of velocity and no dynamic effects
+				# propogate trajectory forward, assuming perfect control of velocity and no dynamic effects. #We have pose (self.pose_in_map_np) and we have vels from rows in self.all_opts
                 #[[translation vel, roational vel]]
                 #Local paths is a #of timesteps by #of vel rows by 3 (for points) matrix
                 #horizon time steps are the number of timesteps we are propagating for. Therefore we come up with that amount of points along the trajectory
@@ -218,16 +218,21 @@ class PathFollower():
             # check all trajectory points for collisions
             # first find the closest collision point in the map to each local path point
             local_paths_pixels = (self.map_origin[:2] + local_paths[:, :, :2]) / self.map_resolution
+            print(local_paths_pixels)
             valid_opts = range(self.num_opts)
             local_paths_lowest_collision_dist = np.ones(self.num_opts) * 50
-
+            #print(valid_opts)
             #print(np.shape(self.map_np))
             #print(local_paths_pixels)
             #print(self.map_nonzero_idxes)
             #print("TO DO: Check the points in local_path_pixels for collisions")
+            #print(range(local_paths_pixels.shape[1]))
             for opt in range(local_paths_pixels.shape[1]):
+                #print(opt)
                 for timestep in range(local_paths_pixels.shape[0]):
                     found = False
+                    #print("option: ", opt)
+                    #print("timestep: ", timestep)
                     #We have x y pixel values in local_paths_pixels
                     #Valid_opts is a vector counting to the number of available trajectories
                     #We want to save the lowest collision distance out of all of the trajectory points in local_paths_lowest_collision_dist
@@ -236,8 +241,14 @@ class PathFollower():
                     #self.map_nonzero_idxes contains a matrix whose rows [x y] correspond to the pixels where there is an obstacle.
 
                     #First get pixel point
+					
+
+
+
                     xp = int(local_paths_pixels[timestep,opt,0])
                     yp = int(local_paths_pixels[timestep,opt,1])
+                    #print("xp: ",xp)
+                    #print("yp: ",yp)
 
                     #radius to check
                     r = self.collision_radius_pix
@@ -250,24 +261,23 @@ class PathFollower():
                     #numOfCirclePoints = circlepoints.shape(0) #number of rows
 
                     obstaclelist = self.map_nonzero_idxes
-
+                    #print(circlepoints)
                     for cp in circlepoints: #for each row in circlepoints
-                        if any(np.equal(obstaclelist,cp).all(1)): #Check if there is a collsion within radius
+					#Check if there is a collsion within radius
+                        if any(np.equal(obstaclelist,cp).all(1)):
+                            #print("cp: ", cp)
+                            #print("obslist: ", obstaclelist)
                             found = True
                             break
-
-                    if found == True: #if so break and remove current opt from valid_opts
-                        #remove current opt from list of valid 
-                        print("break")
+                    if found:
+                        found = False
+                        #print("break")
+                        valid_opts.remove(opt)
+                        #print(valid_opts)
                         break
-                
-                    
-
-
-                    pass
-
+            
             # remove trajectories that were deemed to have collisions
-            print("TO DO: Remove trajectories with collisions!")
+            #print("TO DO: Remove trajectories with collisions!")
 
             # calculate final cost and choose best option
             print("TO DO: Calculate the final cost and choose the best control option!")
