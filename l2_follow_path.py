@@ -29,8 +29,8 @@ ROT_GOAL_TOL = .3  # rad, tolerance to consider a goal complete
 TRANS_VEL_OPTS = [0, 0.025, 0.13, 0.26]  # m/s, max of real robot is .26
 ROT_VEL_OPTS = np.linspace(-1.82, 1.82, 11)  # rad/s, max of real robot is 1.82
 CONTROL_RATE = 5  # Hz, how frequently control signals are sent
-CONTROL_HORIZON = 5  # seconds. if this is set too high and INTEGRATION_DT is too low, code will take a long time to run!
-INTEGRATION_DT = .025  # s, delta t to propagate trajectories forward by
+CONTROL_HORIZON = 16#5  # seconds. if this is set too high and INTEGRATION_DT is too low, code will take a long time to run!
+INTEGRATION_DT = 1.6#.025  # s, delta t to propagate trajectories forward by
 COLLISION_RADIUS = 0.225  # m, radius from base_link to use for collisions, min of 0.2077 based on dimensions of .281 x .306
 ROT_DIST_MULT = .1  # multiplier to change effect of rotational distance in choosing correct control
 OBS_DIST_MULT = .1  # multiplier to change the effect of low distance to obstacles on a path
@@ -224,15 +224,15 @@ class PathFollower():
             #print(local_paths)
             # check all trajectory points for collisions
             # first find the closest collision point in the map to each local path point
-            #for plots in range(0,self.num_opts):
-            #    path1x = local_paths[:,plots,0]
-            #    path1y = local_paths[:,plots,1]
             
-            #    plt.plot(path1x,path1y)
-            #plt.show()
 
 
             local_paths_pixels = (self.map_origin[:2] + local_paths[:, :, :2]) / self.map_resolution
+
+
+
+
+
             #print(local_paths_pixels)
             valid_opts = range(self.num_opts)
             local_paths_lowest_collision_dist = np.ones(self.num_opts) * 50
@@ -305,6 +305,8 @@ class PathFollower():
             #print("TO DO: Calculate the final cost and choose the best control option!")
             final_cost = np.zeros(self.num_opts)
 
+            #print(self.pose_in_map_np)
+
             #HYPERPARAMTERS
             hypParam1 = 0.2 #Larger means more emphasis on next waypoint rather than later waypoints
 
@@ -360,9 +362,23 @@ class PathFollower():
                 #print(final_cost.argmax())
                 #print(final_cost)
                 best_opt = final_cost.argmin()
-                #print(best_opt)
+               
+                #print(local_paths[:5, best_opt,:])
                 control = self.all_opts[best_opt,:]
+                #control = [0.25, 0]
                 
+                plt.imshow(self.map_np)
+
+
+            #for plots in range(0,self.num_opts):
+            #    path1x = local_paths[:,plots,0]
+            #    path1y = local_paths[:,plots,1]
+            
+            #    plt.scatter(path1y,path1x)
+                plt.scatter(utils.se2_pose_list_to_path(local_paths[:, best_opt], 'map'))
+                plt.show()
+
+
                 self.local_path_pub.publish(utils.se2_pose_list_to_path(local_paths[:, best_opt], 'map'))
 
             # send command to robot
