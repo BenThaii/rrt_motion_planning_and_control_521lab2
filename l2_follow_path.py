@@ -9,6 +9,12 @@ import rospy
 import tf2_ros
 from skimage.draw import circle
 
+#debug
+import matplotlib.pyplot as plt
+
+#make my life easy
+from scipy.spatial.distance import cdist
+
 # msgs
 from geometry_msgs.msg import TransformStamped, Twist, PoseStamped
 from nav_msgs.msg import Path, Odometry, OccupancyGrid
@@ -32,7 +38,7 @@ MIN_TRANS_DIST_TO_USE_ROT = TRANS_GOAL_TOL  # m, robot has to be within this dis
 PATH_NAME = 'path.npy'  # saved path from l2_planning.py, should be in the same directory as this file
 
 # here are some hardcoded paths to use if you want to develop l2_planning and this file in parallel
-TEMP_HARDCODE_PATH = [[2, 0, 0], [2.75, -1, -np.pi/2], [2.75, -4, -np.pi/2], [2, -4.4, np.pi]]  # almost collision-free
+TEMP_HARDCODE_PATH = [[0,0,0],[2, 0, 0], [2.75, -1, -np.pi/2], [2.75, -4, -np.pi/2], [2, -4.4, np.pi]]  # almost collision-free
 #TEMP_HARDCODE_PATH = [[2, -.5, 0], [2.4, -1, -np.pi/2], [2.45, -3.5, -np.pi/2], [1.5, -4.4, np.pi]]  # some possible collisions
 
 
@@ -212,13 +218,22 @@ class PathFollower():
                     local_paths[t,u,0] = xt
                     local_paths[t,u,1] = yt
                     local_paths[t,u,2] = thet
-
                     
+
+            
             #print(local_paths)
             # check all trajectory points for collisions
             # first find the closest collision point in the map to each local path point
+            #for plots in range(0,self.num_opts):
+            #    path1x = local_paths[:,plots,0]
+            #    path1y = local_paths[:,plots,1]
+            
+            #    plt.plot(path1x,path1y)
+            #plt.show()
+
+
             local_paths_pixels = (self.map_origin[:2] + local_paths[:, :, :2]) / self.map_resolution
-            print(local_paths_pixels)
+            #print(local_paths_pixels)
             valid_opts = range(self.num_opts)
             local_paths_lowest_collision_dist = np.ones(self.num_opts) * 50
             #print(valid_opts)
@@ -261,40 +276,101 @@ class PathFollower():
                     #numOfCirclePoints = circlepoints.shape(0) #number of rows
 
                     obstaclelist = self.map_nonzero_idxes
-                    #print(circlepoints)
-                    for cp in circlepoints: #for each row in circlepoints
-					#Check if there is a collsion within radius
-                        if any(np.equal(obstaclelist,cp).all(1)):
-                            #print("cp: ", cp)
-                            #print("obslist: ", obstaclelist)
-                            found = True
-                            break
-                    if found:
+                    if any(self.map_np[circlepoints[:,1], circlepoints[:,0]] == 100):
                         found = False
                         #print("break")
                         valid_opts.remove(opt)
                         #print(valid_opts)
                         break
+
+                    #print(circlepoints)
+                    #for cp in circlepoints: #for each row in circlepoints
+					#Check if there is a collsion within radius
+                        #if any(np.equal(obstaclelist,cp).all(1)):
+                            #print("cp: ", cp)
+                            #print("obslist: ", obstaclelist)
+                            #found = True
+                            #break
+                    #if found:
+                        #found = False
+                        #print("break")
+                        #valid_opts.remove(opt)
+                        #print(valid_opts)
+                        #break
             
             # remove trajectories that were deemed to have collisions
             #print("TO DO: Remove trajectories with collisions!")
 
             # calculate final cost and choose best option
-            print("TO DO: Calculate the final cost and choose the best control option!")
+            #print("TO DO: Calculate the final cost and choose the best control option!")
             final_cost = np.zeros(self.num_opts)
+
+            #HYPERPARAMTERS
+            hypParam1 = 0.2 #Larger means more emphasis on next waypoint rather than later waypoints
+
+            if final_cost.size == 0:
+                pass
+            else:
+                #Get list of waypoints
+                #print(self.path_tuples) #stored as rows [x y theta]
+                waypoints = self.path_tuples[:,:2]
+                #print("waypoints: ", waypoints)
+                #Get list of nodes and their L2 distances to the waypoints
+                #print(valid_opts)
+                for j in valid_opts: #cycle through the valid options
+                    traj = local_paths[:,j,:2]
+                    
+                    distances = cdist(traj,waypoints)
+                    #print(distances)
+                    #In distances, each row is for each node, each column is the distance to each waypoint. Ex. Row 0 contains the distances of node 0 to each waypoint
+                    #We only want to count the waypoints after the one we are closest to. So find argmin of the first node row
+                    closest_waypoint2node0 = np.argmin(distances[0,:])
+					
+                    #only look at distances past the closest one to node 0
+                    valid_WP_D = distances[:,closest_waypoint2node0:]
+                    #print(valid_WP_D)
+                    #now we have a matrix of valid distances from the next waypoint onward with each of our nodes --> validwaypointdistances (nodes by valid waypoints)    
+                    
+                    #Find out the index of the closest waypoint to each node
+                    #valid_WP_mapping = np.argmin(valid_WP_D,1)
+
+                    #I ues this multiple times, so to save time, I do it once here.
+                    numCols_valid_WP = np.size(valid_WP_D,1)
+
+                    #weighted sum the rows of the matrix, first we need to define a weighting column vector the size of the number of waypoints remaining
+                    weights = np.arange(1,numCols_valid_WP+1).reshape(numCols_valid_WP,1)
+                    weights = 1/np.exp(-hypParam1*weights)
+
+                    #Apply weights as per the mapping to each nodes nearest waypoint. The further the waypoint, the less value that part of the score should have.
+                    #weights = weights[valid_WP_mapping]
+                    #print(weights)
+                    #print(valid_WP_D.T)
+                    #final_cost[j] = np.matmul(valid_WP_D.T,weights)[0]
+                   
+                    final_cost[j] = np.sum(np.matmul(valid_WP_D,weights))
+                    #Weighted sum the shortest distances, penalizing the further waypoints
+
+            
+            
             if final_cost.size == 0:  # hardcoded recovery if all options have collision
                 control = [-.1, 0]
             else:
-                best_opt = valid_opts[final_cost.argmin()]
-                control = self.all_opts[best_opt]
+                #print(np.size(self.all_opts))
+                #print(np.size(valid_opts))
+                #print(final_cost.argmax())
+                #print(final_cost)
+                best_opt = final_cost.argmin()
+                #print(best_opt)
+                control = self.all_opts[best_opt,:]
+                
                 self.local_path_pub.publish(utils.se2_pose_list_to_path(local_paths[:, best_opt], 'map'))
 
             # send command to robot
             self.cmd_pub.publish(utils.unicyle_vel_to_twist(control))
 
             # uncomment out for debugging if necessary
-            # print("Selected control: {control}, Loop time: {time}, Max time: {max_time}".format(
-            #     control=control, time=(rospy.Time.now() - tic).to_sec(), max_time=1/CONTROL_RATE))
+            print("Selected control: {control}, Loop time: {time}, Max time: {max_time}".format(
+                 control=control, time=(rospy.Time.now() - tic).to_sec(), max_time=1/CONTROL_RATE))
 
             self.rate.sleep()
 
