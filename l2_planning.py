@@ -290,7 +290,7 @@ class PathPlanner:
             else:
                 # try to get to the goal location after all substeps
                 ideal_trans_vel = (x_s) / self.traj_time
-                vel = np.clip(ideal_trans_vel, -self.vel_max, self.vel_max)
+                vel = np.clip(ideal_trans_vel, 0, self.vel_max)
                 rot_vel = 0
             
             robot_traj_i = self.trajectory_rollout(vel, rot_vel)        # robot trajectory as seen in frame of node_i
@@ -385,8 +385,8 @@ class PathPlanner:
         
         # Responsible: Ben
         # generate random velocity control within the velocity constraints
-        vel = -self.vel_max + np.random.random() * 2 * self.vel_max
-        rot_vel = -self.controller_rot_vel_max + np.random.random() * 2 * self.controller_rot_vel_max
+        vel = 0 + np.random.random() * self.vel_max
+        rot_vel = - self.controller_rot_vel_max + np.random.random() * 2 * self.controller_rot_vel_max
 
         return vel, rot_vel
 
@@ -416,48 +416,60 @@ class PathPlanner:
                 return 0, 0, 0
             else:
                 # try to get to the goal location after all substeps
-                ideal_trans_vel = (x_s - x_i) / self.traj_time
-                viable_vel = np.clip(ideal_trans_vel, -self.vel_max, self.vel_max)
-                return viable_vel, 0, abs((x_s - x_i)/viable_vel)
+                if x_s > 0:
+                    ideal_trans_vel = (x_s - x_i) / self.traj_time
+                    viable_vel = np.clip(ideal_trans_vel, 0, self.vel_max)
+                    return viable_vel, 0, abs((x_s - x_i)/viable_vel)
+                else:
+                    raise Exception('impossible to reach with forward velocity only -> deal with later')
         elif abs(x_s - x_i) <  self.coord_error_tolerance:
             # goal is perpendicular to the current viable robot path -> use circular path
             # this is a special case due to the perpenducularity
             radius = abs(y_s - y_i)/2  
-            arc_angle = np.math.pi
+            if y_s > y_i:
+                arc_angle = np.math.pi
+            else:
+                arc_angle = -np.math.pi
         else:
             # drive along the arc of a circle with radius > 0
             y_c = ((x_s - x_i)**2 / (y_s - y_i) + y_i + y_s) * 1/2
             radius = abs(y_c - y_i)     # radius = translational / rotational vel
             # arc_angle = np.math.atan2(x_s, y_c)
-            arc_angle = np.math.asin(x_s/radius)
-            if y_s> radius:
-                if arc_angle > 0:
-                    arc_angle = np.math.pi - arc_angle
-                else:
-                    arc_angle -= -np.math.pi - arc_angle
+            if y_c > 0:
+                arc_angle = np.math.atan2(x_s, y_c - y_s) % (2 * np.math.pi)
+            else:
+                arc_angle = - (np.math.atan2(x_s, y_s - y_c) % (2* np.math.pi))
+            # arc_angle = np.math.asin(x_s/radius)
+            # if abs(y_s)> radius:
+            #     if arc_angle > 0:
+            #         arc_angle = np.math.pi - arc_angle
+            #     else:
+            #         arc_angle -= -np.math.pi - arc_angle
             
-        arc_length = arc_angle * radius     # may be negative if the robot has to move backward
+        arc_length = abs(arc_angle * radius)    # may be negative if the robot has to move backward
         ideal_trans_vel = arc_length/ self.traj_time
-        viable_trans_vel =  np.clip(ideal_trans_vel, -self.vel_max, self.vel_max)
+        trans_vel_mag =  np.clip(ideal_trans_vel, 0, self.vel_max)
 
-        trans_vel_mag = abs(viable_trans_vel)
-        forward = viable_trans_vel > 0
         rot_vel_mag = trans_vel_mag/radius
         # print(trans_vel_mag, rot_vel_mag)
         rot_vel_mag =  np.clip(rot_vel_mag, 0, self.rot_vel_max)
         trans_vel_mag = rot_vel_mag * radius
         travel_time = abs(arc_length/trans_vel_mag)
 
-        if forward:
-            if y_s > y_i:
-                return trans_vel_mag, rot_vel_mag, travel_time   #1st quadrant
-            else:
-                return trans_vel_mag, -rot_vel_mag, travel_time  #4th quadrant
+        if y_s > y_i:
+            return trans_vel_mag, rot_vel_mag, travel_time   #1st quadrant
         else:
-            if y_s > y_i:
-                return -trans_vel_mag, -rot_vel_mag, travel_time #2nd quadrant
-            else:
-                return -trans_vel_mag, rot_vel_mag, travel_time  #3rd quadrant
+            return trans_vel_mag, -rot_vel_mag, travel_time  #4th quadrant
+        # if forward:
+        #     if y_s > y_i:
+        #         return trans_vel_mag, rot_vel_mag, travel_time   #1st quadrant
+        #     else:
+        #         return trans_vel_mag, -rot_vel_mag, travel_time  #4th quadrant
+        # else:
+        #     if y_s > y_i:
+        #         return -trans_vel_mag, -rot_vel_mag, travel_time #2nd quadrant
+        #     else:
+        #         return -trans_vel_mag, rot_vel_mag, travel_time  #3rd quadrant
 
 
     
@@ -478,7 +490,7 @@ class PathPlanner:
             traj_points[0,:] = vel * range(1, num_steps + 1)
         else:
             radius = abs(vel/rot_vel)
-            substep_arc = abs(vel) * self.timestep
+            substep_arc = vel * self.timestep
             substep_angle = substep_arc/radius
             forward = vel > 0
             upward = (vel > 0) == (rot_vel > 0)         # 1st and 2nd quadrant
@@ -577,11 +589,16 @@ class PathPlanner:
         
 
         node_f_i[2, 0] = rot_vel * self.traj_time           # angle of goal point
+        a = np.linalg.norm(robot_traj_i[:2, -1] - node_f_i[:2, 0])
+        # print(np.linalg.norm(robot_traj_i[:2, -1] - node_f_i[:2, 0]))
+
         robot_traj_i = np.hstack((robot_traj_i, node_f_i))  # add goal point to the trajectory (goal point is most likely excluded)
         num_traj_points += 1
         
         # convert back to world coordinate for collision detection
         robot_traj_pts = np.matmul(T_w_i, np.vstack((robot_traj_i[:2, :], np.ones((1, num_traj_points)))))      # convert x,y coord from frame i to world frame
+        
+        
         
         if checkCollision:
             if self.traj_has_collision(robot_traj_pts):
@@ -590,10 +607,14 @@ class PathPlanner:
                 #no collision -> calculate the correct heading, and return
                 
                 robot_traj_pts[2, :] = (theta_i_w + robot_traj_pts[2, :]) % ( 2 * np.math.pi)
-                
-                sampled_cells = self.point_to_cell(robot_traj_pts[:2, :])
-                self.axs[0].scatter(sampled_cells[0,:], sampled_cells[1,:])
-                self.axs[0].plot(sampled_cells[0,:], sampled_cells[1,:])
+                if a > 1:
+                    sampled_cells = self.point_to_cell(robot_traj_pts[:2, :])
+                    self.axs[0].scatter(sampled_cells[0,:], sampled_cells[1,:])
+                    self.axs[0].plot(sampled_cells[0,:], sampled_cells[1,:])
+                    self.robot_controller_exact(node_i_i, point_f_i)
+                    num_traj_points = int(np.math.floor(abs(total_traj_length/(vel * self.timestep))))
+                    robot_traj_i = self.trajectory_rollout(vel, rot_vel, num_traj_points)
+                    print('hi')
                 return True, robot_traj_pts, total_traj_length
         else:
             return True, robot_traj_pts, total_traj_length
@@ -772,7 +793,7 @@ class PathPlanner:
         
         #squared radius for efficiency
         #rad = self.ball_radius() #ball radius = 2.5
-        rad = 5
+        rad = 2.5
         rad_2 = rad**2 
         
         #need to find ids of closest nodes within radius
