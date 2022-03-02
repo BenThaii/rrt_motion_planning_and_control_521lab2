@@ -75,7 +75,7 @@ class PathPlanner:
         self.stopping_dist = stopping_dist #m
 
         #Trajectory Simulation Parameters
-        self.timestep = 1.6 #s      #ben: max translation between consecutive pose is approx 0.4m 
+        self.timestep = 1 #s      #ben: max translation between consecutive pose is approx 0.4m 
         self.num_substeps = 10
 
         #Planning storage
@@ -303,7 +303,7 @@ class PathPlanner:
 
         elif x_s ** 2 + y_s ** 2 < self.exact_soln_radius_sq:
             # close to the goal, try analytical solution first
-            vel, rot_vel = self.robot_controller_exact(node_i_i, point_s_i)
+            vel, rot_vel, _ = self.robot_controller_exact(node_i_i, point_s_i)
             robot_traj_i = self.trajectory_rollout(vel, rot_vel)        # robot trajectory as seen in frame of node_i
             robot_traj = np.matmul(T_w_i, np.vstack((robot_traj_i[:2, :], np.ones((1, self.num_substeps)))))      # convert x,y coord from frame i to world frame
             if not self.traj_has_collision(robot_traj):
@@ -395,15 +395,14 @@ class PathPlanner:
 
 
     
-    def robot_controller_exact(self, node_i, point_s, max_vel_enforced = True):
+    def robot_controller_exact(self, node_i, point_s):
         #This controller determines the velocities that will nominally move the robot from node i to node s
         #Max velocities should be enforced
         # print("TO DO: Implement a control scheme to drive you towards the sampled point")
         
         # Responsible: Ben
-        # calculate radius of motion, or straight line along x-axis -> determine velocities exactly analytically so that:
-            # if max_vel_enforced == False: reach point_s after selftraj_time
-            # if max_vel_enforced == True: travel along the trajectory that ends at point_s, but may not reach point_s
+        # calculate motion around a circle, or straight line along x-axis 
+        # return: vel, rot_vel, time_of_travel
         x_i = node_i[0,0]
         y_i = node_i[1,0]
 
@@ -414,14 +413,12 @@ class PathPlanner:
             # drive in a straight line
             if abs(x_s - x_i) <  self.coord_error_tolerance:
                 # start and end point coincides
-                return 0, 0
+                return 0, 0, 0
             else:
                 # try to get to the goal location after all substeps
                 ideal_trans_vel = (x_s - x_i) / self.traj_time
-                if max_vel_enforced:
-                    return np.clip(ideal_trans_vel, -self.vel_max, self.vel_max), 0
-                else:
-                    return ideal_trans_vel, 0
+                viable_vel = np.clip(ideal_trans_vel, -self.vel_max, self.vel_max)
+                return viable_vel, 0, abs((x_s - x_i)/viable_vel)
         elif abs(x_s - x_i) <  self.coord_error_tolerance:
             # goal is perpendicular to the current viable robot path -> use circular path
             # this is a special case due to the perpenducularity
@@ -441,30 +438,26 @@ class PathPlanner:
             
         arc_length = arc_angle * radius     # may be negative if the robot has to move backward
         ideal_trans_vel = arc_length/ self.traj_time
-
-        if max_vel_enforced:
-            viable_trans_vel =  np.clip(ideal_trans_vel, -self.vel_max, self.vel_max)
-        else:
-            viable_trans_vel = ideal_trans_vel
+        viable_trans_vel =  np.clip(ideal_trans_vel, -self.vel_max, self.vel_max)
 
         trans_vel_mag = abs(viable_trans_vel)
         forward = viable_trans_vel > 0
         rot_vel_mag = trans_vel_mag/radius
         # print(trans_vel_mag, rot_vel_mag)
-        if max_vel_enforced and (rot_vel_mag > self.rot_vel_max):
-            rot_vel_mag =  np.clip(rot_vel_mag, 0, self.rot_vel_max)
-            trans_vel_mag = rot_vel_mag * radius
+        rot_vel_mag =  np.clip(rot_vel_mag, 0, self.rot_vel_max)
+        trans_vel_mag = rot_vel_mag * radius
+        travel_time = abs(arc_length/trans_vel_mag)
 
         if forward:
             if y_s > y_i:
-                return trans_vel_mag, rot_vel_mag   #1st quadrant
+                return trans_vel_mag, rot_vel_mag, travel_time   #1st quadrant
             else:
-                return trans_vel_mag, -rot_vel_mag  #4th quadrant
+                return trans_vel_mag, -rot_vel_mag, travel_time  #4th quadrant
         else:
             if y_s > y_i:
-                return -trans_vel_mag, -rot_vel_mag #2nd quadrant
+                return -trans_vel_mag, -rot_vel_mag, travel_time #2nd quadrant
             else:
-                return -trans_vel_mag, rot_vel_mag  #3rd quadrant
+                return -trans_vel_mag, rot_vel_mag, travel_time  #3rd quadrant
 
 
     
@@ -570,11 +563,14 @@ class PathPlanner:
         point_f_i = point_f_i_aug[:2]
         node_f_i = point_f_i_aug.copy()
 
-        vel, rot_vel = self.robot_controller_exact(node_i_i, point_f_i, max_vel_enforced= False)
+        vel, rot_vel, travel_time = self.robot_controller_exact(node_i_i, point_f_i)
 
-        total_traj_length = np.abs(vel * self.traj_time)
+        total_traj_length = np.abs(vel * travel_time)
+
+        signed_radius = vel/rot_vel
+
         
-        num_traj_points = int(np.math.floor(total_traj_length/self.max_dist_per_step))
+        num_traj_points = int(np.math.floor(abs(total_traj_length/(vel * self.timestep))))
 
         robot_traj_i = self.trajectory_rollout(vel, rot_vel, num_traj_points)
 
@@ -594,6 +590,10 @@ class PathPlanner:
                 #no collision -> calculate the correct heading, and return
                 
                 robot_traj_pts[2, :] = (theta_i_w + robot_traj_pts[2, :]) % ( 2 * np.math.pi)
+                
+                sampled_cells = self.point_to_cell(robot_traj_pts[:2, :])
+                self.axs[0].scatter(sampled_cells[0,:], sampled_cells[1,:])
+                self.axs[0].plot(sampled_cells[0,:], sampled_cells[1,:])
                 return True, robot_traj_pts, total_traj_length
         else:
             return True, robot_traj_pts, total_traj_length
@@ -772,7 +772,7 @@ class PathPlanner:
         
         #squared radius for efficiency
         #rad = self.ball_radius() #ball radius = 2.5
-        rad = 0.5
+        rad = 5
         rad_2 = rad**2 
         
         #need to find ids of closest nodes within radius
@@ -1055,12 +1055,12 @@ def main():
     # print(path_planner.closest_node(np.array([[0], [1]])))
     # print(path_planner.closest_node(np.array([[1.5], [0]])))
 
-    A = np.zeros((3,1))
-    B = np.zeros((3,1))
-    B[0, 0] = 2
-    B[1, 0] = 2
-    C = np.hstack((A,B))
-    path_planner.cost_to_come(C)
+    # A = np.zeros((3,1))
+    # B = np.zeros((3,1))
+    # B[0, 0] = 2
+    # B[1, 0] = 2
+    # C = np.hstack((A,B))
+    # path_planner.cost_to_come(C)
 
     '''start = time.time()
     nodes = path_planner.rrt_planning()
@@ -1069,8 +1069,8 @@ def main():
     # time.sleep(1)
 
     start = time.time()
-    # nodes = path_planner.rrt_star_planning()
-    nodes = path_planner.rrt_planning()
+    nodes = path_planner.rrt_star_planning()
+    # nodes = path_planner.rrt_planning()
     print(time.time()-start)
     
     node_path_metric = np.hstack(path_planner.recover_path())
@@ -1080,6 +1080,7 @@ def main():
     node_cells = path_planner.point_to_cell(node_path_metric[:2, :])
     plt.imshow(path_planner.occupancy_map)
     #plt.plot(node_cells[0,:], node_cells[1,:])
+    plt.scatter(node_cells[0,:], node_cells[1,:])
     plt.plot(node_cells[0,:], node_cells[1,:])
     plt.show()
     time.sleep(1)
