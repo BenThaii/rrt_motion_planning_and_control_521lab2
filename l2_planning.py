@@ -297,7 +297,7 @@ class PathPlanner:
             robot_traj = np.matmul(T_w_i, np.vstack((robot_traj_i[:2, :], np.ones((1, self.num_substeps)))))      # convert x,y coord from frame i to world frame
             if not self.traj_has_collision(robot_traj):
                 # do not have any collision
-                robot_traj[2, :] = (theta_i_w + robot_traj_i[2, :]) % np.math.pi
+                robot_traj[2, :] = (theta_i_w + robot_traj_i[2, :]) % ( 2 * np.math.pi)
                 return True, robot_traj, vel
             
 
@@ -308,7 +308,7 @@ class PathPlanner:
             robot_traj = np.matmul(T_w_i, np.vstack((robot_traj_i[:2, :], np.ones((1, self.num_substeps)))))      # convert x,y coord from frame i to world frame
             if not self.traj_has_collision(robot_traj):
                 # do not have any collision
-                robot_traj[2, :] = (theta_i_w + robot_traj_i[2, :]) % np.math.pi
+                robot_traj[2, :] = (theta_i_w + robot_traj_i[2, :]) % ( 2 * np.math.pi)
                 return True, robot_traj, vel
 
         # neither easy, nor exact solution works -> use random rollout to select a trajectory
@@ -350,7 +350,7 @@ class PathPlanner:
             dist_from_goal_culmulative = (deviations_from_goal * deviations_from_goal).sum()
             if dist_from_goal_culmulative < best_dist_from_goal_culmulative:
                 best_dist_from_goal_culmulative = dist_from_goal_culmulative
-                robot_traj[2, :] = (theta_i_w + robot_traj_i[2, :]) % np.math.pi
+                robot_traj[2, :] = (theta_i_w + robot_traj_i[2, :]) % ( 2 * np.math.pi)
                 best_traj = robot_traj
                 best_vel = vel
 
@@ -593,7 +593,7 @@ class PathPlanner:
             else:
                 #no collision -> calculate the correct heading, and return
                 
-                robot_traj_pts[2, :] = (theta_i_w + robot_traj_pts[2, :]) % np.math.pi
+                robot_traj_pts[2, :] = (theta_i_w + robot_traj_pts[2, :]) % ( 2 * np.math.pi)
                 return True, robot_traj_pts, total_traj_length
         else:
             return True, robot_traj_pts, total_traj_length
