@@ -93,7 +93,7 @@ class PathFollower():
 
         # to use the temp hardcoded paths above, switch the comment on the following two lines
         #self.path_tuples = np.load(os.path.join(cur_dir, 'path.npy')).T
-        self.path_tuples = np.array(TEMP_HARDCODE_PATH[:-1])
+        self.path_tuples = np.array(TEMP_HARDCODE_PATH)
 
         self.path = utils.se2_pose_list_to_path(self.path_tuples, 'map')
         self.global_path_pub.publish(self.path)
@@ -120,6 +120,9 @@ class PathFollower():
 
         # Ben: extra variables
         self.coord_error_tolerance = 1e-8     # for coordinates
+        self.vel_max = TRANS_VEL_OPTS[-1]
+        self.rot_vel_max = ROT_VEL_OPTS[-1]
+        self.desirable_trans_vel = 0.13
 
         rospy.on_shutdown(self.stop_robot_on_shutdown)
         self.follow_path()
@@ -161,43 +164,64 @@ class PathFollower():
         return traj_points 
     
 
-    def points_to_robot_circle(self, points):
-        #Convert a series of [x,y] points to robot map footprints for collision detection
-        #Hint: The disk function is included to help you with this function
-        # print("TO DO: Implement a method to get the pixel locations of the robot path")
-
+    def robot_controller_exact(self, node_i, point_s):
+        #This controller determines the velocities that will nominally move the robot from node i to node s
+        #Max velocities should be enforced
+        # print("TO DO: Implement a control scheme to drive you towards the sampled point")
+        
         # Responsible: Ben
-        # input: (2xN) assume to be center of the robot in world coordinate
-        # Output: 2 arrays: 1) x-indices of pixels occupied by the robot at all points 2) corresponding y-indices of pixels occupied by the robot at all points
-        footprints_idx_x = []
-        footprints_idx_y = []
-        pixel_centers = self.point_to_cell(points)      #convert to pixel center, then obtain footprint -> less conversion
+        # calculate radius of motion, or straight line along x-axis -> determine velocities exactly analytically, with constraints enforced on both velocities
 
-        for i in range(points.shape[1]):
-            new_idx_x, new_idx_y = circle(pixel_centers[0,i], pixel_centers[1,i], self.robot_pixel_radius) 
-            footprints_idx_x.extend(new_idx_x)
-            footprints_idx_y.extend(new_idx_y)
+        x_i = node_i[0,0]
+        y_i = node_i[1,0]
 
-        return footprints_idx_x, footprints_idx_y
+        x_s = point_s[0,0]
+        y_s = point_s[1,0]
 
-
-    def traj_has_collision(self, robot_traj):
-        # use the x and y coordinates of the trajectory, return True if there is a collision
-        # responsible: Ben (helper function)
-        footprint_x, footprint_y = self.points_to_robot_circle(robot_traj[:2,:])
-
-        footprint_x_np = np.array(footprint_x)
-        footprint_y_np = np.array(footprint_y)
-
-        if any(footprint_x_np < 0) or any(footprint_x_np >= self.map_shape[0]) or any(footprint_y_np < 0) or any(footprint_y_np >= self.map_shape[1]): 
-            # there is a collision against the boundary
-            return True
-
-        elif any(self.occupancy_map[footprint_y, footprint_x] == 0):
-            # there is a collision agains the obstacles
-            return True
+        if abs(y_s - y_i) <  self.coord_error_tolerance:
+            # drive in a straight line
+            if abs(x_s - x_i) <  self.coord_error_tolerance:
+                # start and end point coincides
+                return 0, 0
+            else:
+                # try to get to the goal location after all substeps
+                ideal_trans_vel = (x_s - x_i) / CONTROL_HORIZON
+                return np.clip(ideal_trans_vel, -self.vel_max, self.vel_max), 0
+        elif abs(x_s - x_i) <  self.coord_error_tolerance:
+            # goal is perpendicular to the current viable robot path -> use circular path
+            # this is a special case due to the perpenducularity
+            radius = abs(y_s - y_i)/2  
+            arc_angle = np.math.pi
         else:
-            return False
+            # drive along the arc of a circle with radius > 0
+            y_c = ((x_s - x_i)**2 / (y_s - y_i) + y_i + y_s) * 1/2
+            radius = abs(y_c - y_i)     # radius = translational / rotational vel
+            arc_angle = np.math.asin(x_s/radius)
+            
+        arc_length = arc_angle * radius     # may be negative if the robot has to move backward
+
+
+        ideal_trans_vel = self.desirable_trans_vel                  # want to move forward at this speed
+        viable_trans_vel =  np.clip(ideal_trans_vel, -self.vel_max, self.vel_max)
+
+        trans_vel_mag = abs(viable_trans_vel)
+        forward = viable_trans_vel > 0
+        rot_vel_mag = trans_vel_mag/radius
+        if rot_vel_mag > self.rot_vel_max:
+            rot_vel_mag =  np.clip(rot_vel_mag, 0, self.rot_vel_max)
+            trans_vel_mag = rot_vel_mag * radius
+
+        if forward:
+            if y_s > y_i:
+                return trans_vel_mag, rot_vel_mag   #1st quadrant
+            else:
+                return trans_vel_mag, -rot_vel_mag  #4th quadrant
+        else:
+            if y_s > y_i:
+                return -trans_vel_mag, -rot_vel_mag #2nd quadrant
+            else:
+                return -trans_vel_mag, rot_vel_mag  #3rd quadrant
+
 
     def follow_path(self):
         while not rospy.is_shutdown():
@@ -211,17 +235,35 @@ class PathFollower():
             # print("TO DO: Propogate the trajectory forward, storing the resulting points in local_paths!")
             
             # prepare all coordinate transformations
+            print(self.pose_in_map_np)
             theta_v_w = self.pose_in_map_np[2]
             T_w_v = np.array([[np.math.cos(theta_v_w), -np.math.sin(theta_v_w), self.pose_in_map_np[0]],
                             [np.math.sin(theta_v_w),  np.math.cos(theta_v_w), self.pose_in_map_np[1]],
                             [0, 0, 1]])    #ece470 convention
+            T_v_w = np.linalg.inv(T_w_v)
             
             #find collision free controls and cost
 
             # #HYPERPARAMTERS
             discount_factor = 0.9 #Larger means more emphasis on next waypoint rather than later waypoints
 
+            # find goal trajectory:
+            # current goal in current robot frame
+
+            cur_goal_vector = np.resize(self.cur_goal, (-1, 1))
+            cur_goal_x = self.cur_goal[0]
+            cur_goal_y = self.cur_goal[1]
+            cur_goal_v = np.matmul(T_v_w, np.array([[cur_goal_x], [cur_goal_y], [1]]))
+            trans_vel_goal, rot_vel_goal = self.robot_controller_exact(np.zeros((3,1)), cur_goal_v)
+
+            goal_traj_v = self.trajectory_rollout(trans_vel_goal, rot_vel_goal)        # robot trajectory as seen in frame of node_i
+            goal_traj = np.matmul(T_w_v, np.vstack((goal_traj_v[:2, :], np.ones((1, self.horizon_timesteps)))))      # convert x,y coord from frame i to world frame
+            goal_traj[2, :] = (theta_v_w + goal_traj_v[2, :]) % (2 * np.math.pi)
+                
+
             collision_free_controls = []
+            collision_free_costs = []
+            collision_free_trajs = []
             for trans_vel, rot_vel in self.all_opts:
                 robot_traj_v = self.trajectory_rollout(trans_vel, rot_vel)        # robot trajectory as seen in frame of node_i
                 robot_traj = np.matmul(T_w_v, np.vstack((robot_traj_v[:2, :], np.ones((1, self.horizon_timesteps)))))      # convert x,y coord from frame i to world frame
@@ -246,33 +288,33 @@ class PathFollower():
                     circlepoints = np.array([xcirc,ycirc]).T
                     #numOfCirclePoints = circlepoints.shape(0) #number of rows
 
-                    obstaclelist = self.map_nonzero_idxes
                     if any(self.map_np[circlepoints[:,1], circlepoints[:,0]] == 100):
                         hasCollision = True
                         break
-                    else:
-                        
-                    
-                # if not hasCollision:
-                #     # this is a good trajectory -> calculate heading & save
-                #     collision_free_controls.append([trans_vel, rot_vel])
-                #     robot_traj[2, :] = (theta_v_w + robot_traj_v[2, :]) % (2 * np.math.pi)
                 
-                #     # disp_to_goal_node = local_paths[:,valid_opts,:2] - self.cur_goal[:2]
-                #     disp_to_goal_node = robot_traj - self.cur_goal
-                #     dist_to_goal_node = np.abs(disp_to_goal_node).sum(axis = 2)
+                if not hasCollision:
+                    # this is a good trajectory -> calculate heading & save
+                    robot_traj[2, :] = (theta_v_w + robot_traj_v[2, :]) % (2 * np.math.pi)
+                    # disp_to_goal_node = robot_traj - self.cur_goal
+                    disp_to_goal_node = robot_traj[:2] - goal_traj[:2]
+                    dist_to_goal_node = np.abs(disp_to_goal_node).sum(axis = 0)
                     
-                #     discounted_weight = np.power(discount_factor, np.resize(np.arange(1, self.horizon_timesteps + 3), (-1, 1)))
+                    discounted_weight = np.power(discount_factor, np.arange(1, self.horizon_timesteps + 1))
 
-                #     discounted_dist_to_goal_node = discounted_weight * dist_to_goal_node
-                #     dist_to_goal_node_total = discounted_dist_to_goal_node.sum(axis = 0)           # sum of all distances to cur_goal of the nodes in each trajectory
+                    discounted_dist_to_goal_node = discounted_weight * dist_to_goal_node
+                    dist_to_goal_node_total = discounted_dist_to_goal_node.sum()           # sum of all distances to cur_goal of the nodes in each trajectory
                     
-                #     best_opt = valid_opts[np.argmin(dist_to_goal_node_total)]
-                #     control = self.all_opts[best_opt,:]
+                    collision_free_controls.append([trans_vel, rot_vel])
+                    collision_free_costs.append(dist_to_goal_node_total)
+                    collision_free_trajs.append(robot_traj)
 
-                print('hi')
+            best_traj_idx = np.argmin(collision_free_costs)
+            control = collision_free_controls[best_traj_idx]
+            # control = np.array([0,0])
+            # print(collision_free_trajs[best_traj_idx])
+            # self.local_path_pub.publish(utils.se2_pose_list_to_path(collision_free_trajs[best_traj_idx].T, 'map'))
+            self.local_path_pub.publish(utils.se2_pose_list_to_path(goal_traj.T, 'map'))
 
-            print('hi')
             
             
             
@@ -535,11 +577,11 @@ class PathFollower():
             # #     plt.show()
 
 
-            control = self.all_opts[best_opt,:]
-            # control = np.array([0,0])
+            # control = self.all_opts[best_opt,:]
+            # # control = np.array([0,0])
 
-            for i in range(local_paths.shape[1]):
-                self.local_path_pub.publish(utils.se2_pose_list_to_path(local_paths[:, i], 'map'))
+            # for i in range(local_paths.shape[1]):
+            #     self.local_path_pub.publish(utils.se2_pose_list_to_path(local_paths[:, i], 'map'))
 
             # send command to robot
             self.cmd_pub.publish(utils.unicyle_vel_to_twist(control))
