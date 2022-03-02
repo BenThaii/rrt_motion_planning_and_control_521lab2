@@ -110,7 +110,7 @@ class PathPlanner:
         self.max_dist_per_traj_sq = self.max_dist_per_traj**2
         self.stopping_dist_sq = self.stopping_dist ** 2
 
-        self.controller_rot_vel_max = min(self.rot_vel_max, 2 * np.math.pi/self.traj_time)
+        self.controller_rot_vel_max = min(self.rot_vel_max, np.math.pi/self.traj_time)
         # Ben: other configurations
         self.coord_error_tolerance = 1e-8     # for coordinates
         self.max_rrt_iteration = 5000 
@@ -431,7 +431,13 @@ class PathPlanner:
             # drive along the arc of a circle with radius > 0
             y_c = ((x_s - x_i)**2 / (y_s - y_i) + y_i + y_s) * 1/2
             radius = abs(y_c - y_i)     # radius = translational / rotational vel
+            # arc_angle = np.math.atan2(x_s, y_c)
             arc_angle = np.math.asin(x_s/radius)
+            if y_s> radius:
+                if arc_angle > 0:
+                    arc_angle = np.math.pi - arc_angle
+                else:
+                    arc_angle -= -np.math.pi - arc_angle
             
         arc_length = arc_angle * radius     # may be negative if the robot has to move backward
         ideal_trans_vel = arc_length/ self.traj_time
@@ -444,6 +450,7 @@ class PathPlanner:
         trans_vel_mag = abs(viable_trans_vel)
         forward = viable_trans_vel > 0
         rot_vel_mag = trans_vel_mag/radius
+        # print(trans_vel_mag, rot_vel_mag)
         if max_vel_enforced and (rot_vel_mag > self.rot_vel_max):
             rot_vel_mag =  np.clip(rot_vel_mag, 0, self.rot_vel_max)
             trans_vel_mag = rot_vel_mag * radius
@@ -496,6 +503,9 @@ class PathPlanner:
                 traj_points[1, :] = -1 * traj_points[1, :]
             if not heading_upward:
                 traj_points[2, :] = -1 * traj_points[2, :]
+            # print('hi')
+            # print(vel, rot_vel)
+            # res = self.robot_controller_exact(np.zeros((3,1)), traj_points[:2, [-1]])
             return traj_points  
     
     def point_to_cell(self, point):
@@ -1059,8 +1069,8 @@ def main():
     # time.sleep(1)
 
     start = time.time()
-    nodes = path_planner.rrt_star_planning()
-    # nodes = path_planner.rrt_planning()
+    # nodes = path_planner.rrt_star_planning()
+    nodes = path_planner.rrt_planning()
     print(time.time()-start)
     
     node_path_metric = np.hstack(path_planner.recover_path())
