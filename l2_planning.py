@@ -8,7 +8,7 @@ import time
 #import pygame_utils
 import matplotlib.image as mpimg
 from skimage.draw import circle
-from skimage.draw import disk
+# from skimage.draw import disk
 
 #import skimage
 
@@ -110,6 +110,7 @@ class PathPlanner:
         self.max_dist_per_traj_sq = self.max_dist_per_traj**2
         self.stopping_dist_sq = self.stopping_dist ** 2
 
+        self.controller_rot_vel_max = min(self.rot_vel_max, 2 * np.math.pi/self.traj_time)
         # Ben: other configurations
         self.coord_error_tolerance = 1e-8     # for coordinates
         self.max_rrt_iteration = 5000 
@@ -333,8 +334,8 @@ class PathPlanner:
             #skimage.draw.circle(r, c, radius[, shape])
             #skimage.draw.disk
             #skimage.draw.disk(center, radius, *, shape=None)
-            #new_idx_x, new_idx_y = circle(terminal_node_cell[0,0], terminal_node_cell[1,0], self.invalid_pixel_radius) 
-            new_idx_x, new_idx_y = disk((terminal_node_cell[0,0], terminal_node_cell[1,0]), self.invalid_pixel_radius)
+            new_idx_x, new_idx_y = circle(terminal_node_cell[0,0], terminal_node_cell[1,0], self.invalid_pixel_radius) 
+            # new_idx_x, new_idx_y = disk((terminal_node_cell[0,0], terminal_node_cell[1,0]), self.invalid_pixel_radius)
             
             if any(self.invalid_locations[new_idx_y, new_idx_x] == 1):
                 continue
@@ -385,7 +386,8 @@ class PathPlanner:
         # Responsible: Ben
         # generate random velocity control within the velocity constraints
         vel = -self.vel_max + np.random.random() * 2 * self.vel_max
-        rot_vel = -self.rot_vel_max + np.random.random() * 2 * self.rot_vel_max
+        rot_vel = -self.controller_rot_vel_max + np.random.random() * 2 * self.controller_rot_vel_max
+
         return vel, rot_vel
 
 
@@ -520,8 +522,8 @@ class PathPlanner:
         pixel_centers = self.point_to_cell(points)      #convert to pixel center, then obtain footprint -> less conversion
 
         for i in range(points.shape[1]):
-            #new_idx_x, new_idx_y = circle(pixel_centers[0,i], pixel_centers[1,i], self.robot_pixel_radius) #old circle, disk should be the same
-            new_idx_x, new_idx_y = disk((pixel_centers[0,i], pixel_centers[1,i]), self.robot_pixel_radius)
+            new_idx_x, new_idx_y = circle(pixel_centers[0,i], pixel_centers[1,i], self.robot_pixel_radius) #old circle, disk should be the same
+            # new_idx_x, new_idx_y = disk((pixel_centers[0,i], pixel_centers[1,i]), self.robot_pixel_radius)
             footprints_idx_x.extend(new_idx_x)
             footprints_idx_y.extend(new_idx_y)
 
@@ -1058,6 +1060,7 @@ def main():
 
     start = time.time()
     nodes = path_planner.rrt_star_planning()
+    # nodes = path_planner.rrt_planning()
     print(time.time()-start)
     
     node_path_metric = np.hstack(path_planner.recover_path())
