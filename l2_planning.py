@@ -3,11 +3,15 @@
 import numpy as np
 from scipy import argmin
 import yaml
-import pygame
+#import pygame
 import time
-import pygame_utils
+#import pygame_utils
 import matplotlib.image as mpimg
 from skimage.draw import circle
+from skimage.draw import disk
+
+#import skimage
+
 from scipy.linalg import block_diag
 
 #debug
@@ -44,7 +48,7 @@ class PathPlanner:
         except:
             self.occupancy_map = load_map(map_filename)
 
-        self.occupancy_map = np.ones((1600,1600))
+        #self.occupancy_map = np.ones((1600,1600)) #makes map purple
         self.map_shape = self.occupancy_map.shape
         self.map_settings_dict = load_map_yaml(map_setings_filename)
 
@@ -82,12 +86,12 @@ class PathPlanner:
         self.lebesgue_free = np.sum(self.occupancy_map) * self.map_settings_dict["resolution"] **2
         self.zeta_d = np.pi
         self.gamma_RRT_star = 2 * (1 + 1/2) ** (1/2) * (self.lebesgue_free / self.zeta_d) ** (1/2)
-        self.gamma_RRT = self.gamma_RRT_star + .1
-        self.epsilon = 2.5
+        self.gamma_RRT = self.gamma_RRT_star + .1 #ball radius parameter
+        self.epsilon = 2.5 #ball radius parameter
         
-        #Pygame window for visualization
-        self.window = pygame_utils.PygameWindow(
-            "Path Planner", (1000, 1000), self.occupancy_map.shape, self.map_settings_dict, self.goal_point, self.stopping_dist)
+        #Pygame window for visualization, remove for testing
+        '''self.window = pygame_utils.PygameWindow(
+            "Path Planner", (1000, 1000), self.occupancy_map.shape, self.map_settings_dict, self.goal_point, self.stopping_dist)'''
         
         # Ben: vertorize and discretize environment information
         self.world_shape_vect =  np.array([[self.map_shape[0] * self.map_settings_dict["resolution"]], 
@@ -100,9 +104,9 @@ class PathPlanner:
         self.robot_pixel_radius = np.ceil(self.robot_radius/ self.map_settings_dict["resolution"])  # upper bound for safety
         
         # do other repeated calculations
-        self.traj_time = self.timestep*self.num_substeps
+        self.traj_time = self.timestep*self.num_substeps #constant throughout?
         self.max_dist_per_step = self.timestep*self.vel_max
-        self.max_dist_per_traj = self.traj_time*self.vel_max
+        self.max_dist_per_traj = self.traj_time*self.vel_max #use as a starting point for circle area
         self.max_dist_per_traj_sq = self.max_dist_per_traj**2
         self.stopping_dist_sq = self.stopping_dist ** 2
 
@@ -189,7 +193,7 @@ class PathPlanner:
                     return True
         return False
     
-    def closest_node(self, point):
+    def closest_node(self, point): #use for RRT*
         #Returns the index of the closest node
         # print("TO DO: Implement a method to get the closest node to a sampled point")
         
@@ -326,7 +330,12 @@ class PathPlanner:
                 continue
             
             # discard trajectories that end at to invalid states
-            new_idx_x, new_idx_y = circle(terminal_node_cell[0,0], terminal_node_cell[1,0], self.invalid_pixel_radius) 
+            #skimage.draw.circle(r, c, radius[, shape])
+            #skimage.draw.disk
+            #skimage.draw.disk(center, radius, *, shape=None)
+            #new_idx_x, new_idx_y = circle(terminal_node_cell[0,0], terminal_node_cell[1,0], self.invalid_pixel_radius) 
+            new_idx_x, new_idx_y = disk((terminal_node_cell[0,0], terminal_node_cell[1,0]), self.invalid_pixel_radius)
+            
             if any(self.invalid_locations[new_idx_y, new_idx_x] == 1):
                 continue
 
@@ -511,14 +520,15 @@ class PathPlanner:
         pixel_centers = self.point_to_cell(points)      #convert to pixel center, then obtain footprint -> less conversion
 
         for i in range(points.shape[1]):
-            new_idx_x, new_idx_y = circle(pixel_centers[0,i], pixel_centers[1,i], self.robot_pixel_radius) 
+            #new_idx_x, new_idx_y = circle(pixel_centers[0,i], pixel_centers[1,i], self.robot_pixel_radius) #old circle, disk should be the same
+            new_idx_x, new_idx_y = disk((pixel_centers[0,i], pixel_centers[1,i]), self.robot_pixel_radius)
             footprints_idx_x.extend(new_idx_x)
             footprints_idx_y.extend(new_idx_y)
 
         return footprints_idx_x, footprints_idx_y
     #Note: If you have correctly completed all previous functions, then you should be able to create a working RRT function
 
-    #RRT* specific functions
+    #RRT* specific functions for task 7
     def ball_radius(self):
         #Close neighbor distance
         card_V = len(self.nodes)
@@ -550,7 +560,7 @@ class PathPlanner:
 
         vel, rot_vel = self.robot_controller_exact(node_i_i, point_f_i, max_vel_enforced= False)
 
-        total_traj_length = vel * self.traj_time
+        total_traj_length = np.abs(vel * self.traj_time)
         
         num_traj_points = int(np.math.floor(total_traj_length/self.max_dist_per_step))
 
@@ -600,7 +610,8 @@ class PathPlanner:
 
         return cost
     
-    def update_children(self, node_id):
+    def update_children(self, node_id, cost_change): 
+        #need to add another function argument for cost before rewiring
         #Given a node_id with a changed cost, update all connected nodes with the new cost
         #print("TO DO: Update the costs of connected nodes after rewiring.")
         
@@ -622,8 +633,8 @@ class PathPlanner:
             #take explored nodeID as an Int
             nodeID = int(queue[0])
 
-            print(queue.size)
-            print(nodeID)
+            #print(queue.size)
+            #print(nodeID)
             #pop explored node
             queue = queue[1:]
 
@@ -632,10 +643,14 @@ class PathPlanner:
                     #push node to visitied and queue list
                     visited = np.append(visited,childID)
                     queue = np.append(queue,childID)
-
+                    
+                    #subtract difference in old - new cost to all children instead euclidean distance
+                    #subtract cost 
+                    self.nodes[childID].cost = self.nodes[childID].cost - cost_change
+                
                     #update cost of children with euclidean distance
-                    dist = np.linalg.norm(self.nodes[nodeID].point[0:2]-self.nodes[childID].point[0:2])
-                    self.nodes[childID].cost = self.nodes[nodeID].cost + dist
+                    #dist = np.linalg.norm(self.nodes[nodeID].point[0:2]-self.nodes[childID].point[0:2])
+                    #self.nodes[childID].cost = self.nodes[nodeID].cost + dist
         
         return
 
@@ -694,10 +709,11 @@ class PathPlanner:
                 # add the final point of the trajectory
                 parent_id = closest_node_id
                 
-                most_recent_cost = trans_vel * self.traj_time #old cost, Needs to be fixed
+                most_recent_cost = np.abs(trans_vel * self.traj_time) #old cost, Needs to be fixed
                 cost = self.nodes[parent_id].cost + most_recent_cost
                 
                 #cost = self.cost_to_come(trajectory_o) #update cost to come using trajectory? - AK WROMG
+                #try weighting trans vs angular 
                 
                 new_node = trajectory_o[:, [-1]]
                 new_node_cell = self.point_to_cell(new_node[:2,[0]])
@@ -733,29 +749,232 @@ class PathPlanner:
             # print("TO DO: Check if at goal point.")
         return self.nodes
     
-    def rrt_star_planning(self):
+    
+    def rewire(self, node_id):
+        #rewiring process, only need to find nodes within new node ball
+        
+        #original node id parameters
+        new_node_pt = self.nodes[node_id].point
+        new_node_cost = self.nodes[node_id].cost #this is the original cost-to-come
+        new_node_parent_id = self.nodes[node_id].parent_id
+        
+        #squared radius for efficiency
+        #rad = self.ball_radius() #ball radius = 2.5
+        rad = 0.5
+        rad_2 = rad**2 
+        
+        #need to find ids of closest nodes within radius
+        neighb = np.array([])
+        
+        #loop over all nodes to find which ids are within the radius: Can be smarter
+        for i in range(len(self.nodes)):
+            #use sqrd distance for efficiency
+            dist_2 = np.sum((new_node_pt[0:2]-self.nodes[i].point[0:2])**2)
+            
+            #Append nodes within radius excluding the new point
+            if rad_2 > dist_2 and i != node_id:
+                neighb = np.append(neighb, i)
+        
+        neighb = neighb.astype(int) #change array to ints
+        
+        #Step 1: Check new point to rewire
+        #initiallize min cost and neighbour id
+        min_cost = new_node_cost
+        min_cost_neighb_id = new_node_parent_id
+        for i in neighb:
+
+            #should use connect_node_to_point(node_i, point_f)
+            #returns bool, robot_traj_pts, total_traj_length, checks for collisions
+            traj_exist, traj, total_traj_length = self.connect_node_to_point(self.nodes[i].point, new_node_pt[0:2])
+
+            if (not traj_exist):
+                continue
+            
+            #COST CALCULATED HERE USING connect_node_to_point
+            #calculate cost to come for neighbours in ball same method done in RRT
+            #most_recent_cost = trans_vel * self.traj_time -> old cost
+            most_recent_cost = np.abs(total_traj_length) 
+            cost = self.nodes[i].cost + most_recent_cost #neihbour cost + rewire cost
+           
+            if min_cost > cost:
+                #reassigned cost of new node
+                min_cost = cost
+                min_cost_neighb_id = i
+        
+        #Rewire node if there is a better cost to come from best neighbour
+        if min_cost_neighb_id != new_node_parent_id:
+            #print(min_cost_neighb_id)
+            self.rewire_helper(node_id, min_cost_neighb_id, min_cost)
+        
+        #Step 2: Check nodes to rewire to new point
+        #Differences: remove node id parent from neighbours, compare costs from new cost of node id to neighbour cost
+        neighb = np.delete(neighb, np.where(neighb == min_cost_neighb_id)) #redundant
+        for i in neighb:
+            #connect_node_to_point(node_i, point_f)
+            #returns bool, robot_traj_pts, total_traj_length, checks for collisions
+            traj_exist, traj, total_traj_length = self.connect_node_to_point(new_node_pt, self.nodes[i].point[0:2])
+        
+            if (not traj_exist):
+                continue
+            
+            #COST CALCULATED HERE USING connect_node_to_point
+            most_recent_cost = np.abs(total_traj_length)
+            cost = self.nodes[node_id].cost + most_recent_cost #add updated cost of node + cost to get to neighbour 
+        
+            #get neighbour cost
+            neighbour_cost = self.nodes[i].cost
+        
+            if neighbour_cost > cost:
+                #rewire neigbour if cost is smaller
+                #print(i)
+                self.rewire_helper(i, node_id, cost)
+        
+        return
+        
+    #to rewire: need node id with new cost, neighbour node id (parent)
+    def rewire_helper(self, node_id, parent_id, new_node_id_cost):
+        #actual rewiring changing parent ids, children ids, and cost
+        old_parent_id = self.nodes[node_id].parent_id
+        
+        #remove node_id from children id of parent
+        #.remove and .append works with lists used in children_ids with specific value
+        self.nodes[old_parent_id].children_ids.remove(node_id)
+        
+        #Add node_id to children id of parent
+        self.nodes[parent_id].children_ids.append(node_id)
+        
+        #Update costs of children of node id (doing parent would be the same shouldnt matter)
+        cost_change = self.nodes[node_id].cost - new_node_id_cost #old - new cost of node_id
+        self.nodes[node_id].cost = new_node_id_cost
+        self.update_children(node_id, cost_change)
+        
+        #Change node_id parent
+        self.nodes[node_id].parent_id = parent_id
+        
+        return
+    
+    def rrt_star_planning(self): #task 7
         #This function performs RRT* for the given map and robot        
+        
+        #iterations = 1000
+        
+        for i in range(self.max_rrt_iteration):
+            
+            #Copied RRT functions: Sample goal node, nearest node, steer and control, 
+            
+            #Sample map space = Sample goal Node
+            if i > self.box_shrink_start:       # shrink the box at shrink_ratio after box_shrink_start number of iterations
+                self.box_ratio = self.final_box_ratio  + self.shrink_ratio * (self.box_ratio - self.final_box_ratio )
+
+            # use 1 of three kinds of pont samples: goal point, goal region, and shrinking total map region
+            if np.random.random() > self.goal_sample_rate + i * self.goal_sample_rate_inc:      # want to bias the sampler towards the goal
+                if np.random.random() > self.goal_region_sample_rate:
+                    point = self.sample_map_space()                 # shrinking total map region, for random exploration (before box_shrink_start), and focus exploitation (after box_shrink_start)
+                else:
+                    point = self.sample_goal_region_space()         # goal region -> ensure explore regions around the goal more -> bias towards the goal region
+            else:
+                point = self.goal_point                             # sample goal_point exactly to prompt exact solution to the goal
+
+            if i > self.box_shrink_start:
+               self.sampled_pts.append(point)
+                
+            #Get the closest point = Find Nearest node ID
+            closest_node_id = self.closest_node(point)
+            
+            #Simulate driving the robot towards the closest point = Steer toward goal 
+            traj_exist, trajectory_o, trans_vel = self.simulate_trajectory(self.nodes[closest_node_id].point, point)
+            #Outputs: Bool, best_traj, best_vel checks for collisions
+
+            #keep 
+            self.closest_pts[:, [i]] = self.nodes[closest_node_id].point
+            if (not traj_exist):
+                # save locations that are not promising (no traj possible) -> dont explore this region again
+                closest_point = self.nodes[closest_node_id].point
+
+                self.node_dist_scaling[closest_node_id] = np.inf            # set distance to these points to be infinite -> will not be identified as closest points to subsequent point samples
+                invalid_point_cell = self.point_to_cell(closest_point[:2, [0]])
+                self.invalid_locations[invalid_point_cell[1,0], invalid_point_cell[0,0]] = 1
+                self.invalid_pts += 1
+
+                ## Note: rather than storing the invalid points, may also store all points within a certain radius of the invalid point. In my experience, not very useful
+                # d_sq_list = [((self.nodes[i].point[0,0] - closest_point[0,0])**2 + (self.nodes[i].point[1,0] - closest_point[1,0])**2)*self.node_dist_scaling[i]
+                #     for i in range(len(self.nodes))]
+                # invalid_inds = np.where(np.array(d_sq_list) < self.invalid_radius)[0]
+                # for i in invalid_inds:
+                #     self.node_dist_scaling[i] = np.inf
+                #     invalid_point_cell = self.point_to_cell(self.nodes[i].point[:2, [0]])
+                #     self.invalid_locations[invalid_point_cell[1,0], invalid_point_cell[0,0]] = 1
+                # self.invalid_pts += len(invalid_inds)
+                # print(self.invalid_pts)
+                continue
+            
+            else:
+                # add the final point of the trajectory
+                parent_id = closest_node_id
+                
+                most_recent_cost = np.abs(trans_vel * self.traj_time) #old cost, Needs to be fixed
+                cost = self.nodes[parent_id].cost + most_recent_cost
+                
+                #cost = self.cost_to_come(trajectory_o) #update cost to come using trajectory? - AK WROMG
+                #try weighting trans vs angular 
+                
+                new_node = trajectory_o[:, [-1]]
+                new_node_cell = self.point_to_cell(new_node[:2,[0]])
+
+                # only add nodes that are not duplicated, this method is much faster (though less accurate) than the check_if_duplicate function
+                if self.visitted_locations[new_node_cell[1,0], new_node_cell[0,0]] == 0:
+                    # not yet visitted
+                    
+                    new_node_id = len(self.nodes)
+                    
+                    self.nodes[parent_id].children_ids.append(new_node_id) 
+                    
+                    self.nodes.append(Node(new_node, parent_id, cost))
+                    self.node_dist_scaling.append(1)
+                    self.visitted_locations[new_node_cell[1,0], new_node_cell[0,0]] = 1
+                else:
+                    continue
+                
+                #Added RRT* rewiring process here
+                #Step 1: Check new point to rewire
+                #Step 2: Check nodes to rewire to new point
+                self.rewire(new_node_id)
+                
+                # check if has reached the goal
+                traj_deviation_from_goal = trajectory_o[:2,:] - self.goal_point
+                traj_dist_from_goal_sq = traj_deviation_from_goal[0,:]**2 + traj_deviation_from_goal[1,:]**2
+                if any(traj_dist_from_goal_sq < self.stopping_dist_sq):
+                    # a point in the trajectory is at the goal location
+                    minind = argmin(traj_dist_from_goal_sq)
+                    self.nodes.append(Node(trajectory_o[:, [minind]], parent_id, cost))
+                    self.node_dist_scaling.append(1)
+                    print('reached goal \n\n\n\n')
+                    break
+        
+        
+        '''        
         for i in range(1): #Most likely need more iterations than this to complete the map!
             #Sample
             point = self.sample_map_space()
 
-            #Closest Node
+            #Closest Node out of the entire tree
             closest_node_id = self.closest_node(point)
 
             #Simulate trajectory
             trajectory_o = self.simulate_trajectory(self.nodes[closest_node_id].point, point)
-
-            #Check for Collision
-            print("TO DO: Check for collision.")
+            '''
+            
+            #Check for Collision, shouldnt follow this its nothing like rrt
+            #print("TO DO: Check for collision.")
 
             #Last node rewire
-            print("TO DO: Last node rewiring")
+            #print("TO DO: Last node rewiring")
 
             #Close node rewire
-            print("TO DO: Near point rewiring")
+            #print("TO DO: Near point rewiring")
 
             #Check for early end
-            print("TO DO: Check for early end")
+            #print("TO DO: Check for early end")
         return self.nodes
     
     def recover_path(self, node_id = -1):
@@ -831,21 +1050,23 @@ def main():
     C = np.hstack((A,B))
     path_planner.cost_to_come(C)
 
-    start = time.time()
+    '''start = time.time()
     nodes = path_planner.rrt_planning()
-    print(time.time()-start)
+    print(time.time()-start)'''
     # path_planner.plot_stuff()
     # time.sleep(1)
 
-
-    # nodes = path_planner.rrt_star_planning()
+    start = time.time()
+    nodes = path_planner.rrt_star_planning()
+    print(time.time()-start)
+    
     node_path_metric = np.hstack(path_planner.recover_path())
     plt.figure()
     x = node_path_metric[0, :]
     y = node_path_metric[1, :]
     node_cells = path_planner.point_to_cell(node_path_metric[:2, :])
     plt.imshow(path_planner.occupancy_map)
-    # plt.plot(node_cells[0,:], node_cells[1,:])
+    #plt.plot(node_cells[0,:], node_cells[1,:])
     plt.plot(node_cells[0,:], node_cells[1,:])
     plt.show()
     time.sleep(1)
