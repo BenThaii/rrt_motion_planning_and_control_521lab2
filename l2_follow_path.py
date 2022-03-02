@@ -135,7 +135,9 @@ class PathFollower():
         traj_points = np.zeros((3, self.horizon_timesteps))
         if abs(rot_vel - 0) < self.coord_error_tolerance:
             # drive on a straight line
-            traj_points[0,:] = vel * range(1, self.horizon_timesteps + 1)
+            traj_points[0,:] = vel * np.arange(1, self.horizon_timesteps + 1)
+        elif  abs(vel - 0) < self.coord_error_tolerance:
+            traj_points[2,:] = rot_vel * np.arange(1, self.horizon_timesteps + 1)
         else:
             radius = abs(vel/rot_vel)
             substep_arc = abs(vel) * INTEGRATION_DT
@@ -156,7 +158,7 @@ class PathFollower():
                 traj_points[1, :] = -1 * traj_points[1, :]
             if not heading_upward:
                 traj_points[2, :] = -1 * traj_points[2, :]
-            return traj_points 
+        return traj_points 
     
 
     def points_to_robot_circle(self, points):
@@ -213,14 +215,60 @@ class PathFollower():
             T_w_v = np.array([[np.math.cos(theta_v_w), -np.math.sin(theta_v_w), self.pose_in_map_np[0]],
                             [np.math.sin(theta_v_w),  np.math.cos(theta_v_w), self.pose_in_map_np[1]],
                             [0, 0, 1]])    #ece470 convention
-            T_v_w = np.linalg.inv(T_w_v)
+            
+            #find collision free controls and cost
 
+            # #HYPERPARAMTERS
+            discount_factor = 0.9 #Larger means more emphasis on next waypoint rather than later waypoints
+
+            collision_free_controls = []
             for trans_vel, rot_vel in self.all_opts:
                 robot_traj_v = self.trajectory_rollout(trans_vel, rot_vel)        # robot trajectory as seen in frame of node_i
                 robot_traj = np.matmul(T_w_v, np.vstack((robot_traj_v[:2, :], np.ones((1, self.horizon_timesteps)))))      # convert x,y coord from frame i to world frame
-            
-                # local_paths_pixels = (self.map_origin[:2] + local_paths[:, :, :2]) / self.map_resolution
+                #note: at this point, havent calculated the exact heading yet
 
+                local_paths_pixels = (self.map_origin[:2] + robot_traj[:2, :].T) / self.map_resolution
+                
+                hasCollision = False
+                for timestep in range(local_paths_pixels.shape[0]):
+                    xp = int(local_paths_pixels[timestep,0])
+                    yp = int(local_paths_pixels[timestep,1])
+                    #print("xp: ",xp)
+                    #print("yp: ",yp)
+
+                    #radius to check
+                    r = self.collision_radius_pix
+                    r = int(r)
+                    
+
+                    #generate pixel points within circle
+                    xcirc, ycirc = circle(xp,yp,r)
+                    circlepoints = np.array([xcirc,ycirc]).T
+                    #numOfCirclePoints = circlepoints.shape(0) #number of rows
+
+                    obstaclelist = self.map_nonzero_idxes
+                    if any(self.map_np[circlepoints[:,1], circlepoints[:,0]] == 100):
+                        hasCollision = True
+                        break
+                    else:
+                        
+                    
+                # if not hasCollision:
+                #     # this is a good trajectory -> calculate heading & save
+                #     collision_free_controls.append([trans_vel, rot_vel])
+                #     robot_traj[2, :] = (theta_v_w + robot_traj_v[2, :]) % (2 * np.math.pi)
+                
+                #     # disp_to_goal_node = local_paths[:,valid_opts,:2] - self.cur_goal[:2]
+                #     disp_to_goal_node = robot_traj - self.cur_goal
+                #     dist_to_goal_node = np.abs(disp_to_goal_node).sum(axis = 2)
+                    
+                #     discounted_weight = np.power(discount_factor, np.resize(np.arange(1, self.horizon_timesteps + 3), (-1, 1)))
+
+                #     discounted_dist_to_goal_node = discounted_weight * dist_to_goal_node
+                #     dist_to_goal_node_total = discounted_dist_to_goal_node.sum(axis = 0)           # sum of all distances to cur_goal of the nodes in each trajectory
+                    
+                #     best_opt = valid_opts[np.argmin(dist_to_goal_node_total)]
+                #     control = self.all_opts[best_opt,:]
 
                 print('hi')
 
