@@ -1045,6 +1045,51 @@ class PathPlanner:
         print(self.invalid_pts)
         plt.show()
 
+    def plot_connection(self): 
+
+        #initialize queue of node ids
+        queue = np.array([])
+
+        #redundant visited node list
+        visited = np.array([])
+
+        #push node_id given
+        queue = np.append(queue,0)
+        visited = np.append(visited,0)
+        plt.figure()
+        plt.imshow(self.occupancy_map)
+        #queue list isnt empty (visited all the children nodes)
+        while queue.size != 0:
+            #take explored nodeID as an Int
+            nodeID = int(queue[0])
+
+            #print(queue.size)
+            #print(nodeID)
+            #pop explored node
+            queue = queue[1:]
+
+            parent_pt = self.nodes[nodeID].point
+
+            for childID in self.nodes[nodeID].children_ids:
+                if childID not in visited: #redundancy
+                    #push node to visitied and queue list
+                    visited = np.append(visited,childID)
+                    queue = np.append(queue,childID)
+                    
+                    #subtract difference in old - new cost to all children instead euclidean distance
+                    #subtract cost 
+                    child_pt = self.nodes[childID].point
+                    parent_cell = self.point_to_cell(parent_pt[:2, :])
+                    child_cell = self.point_to_cell(child_pt[:2, :])
+                    plt.plot([parent_cell[0], child_cell[0]], [parent_cell[1], child_cell[1]], color = 'b')
+                    plt.scatter([parent_cell[0], child_cell[0]], [parent_cell[1], child_cell[1]], color = 'b')
+
+                    #update cost of children with euclidean distance
+                    #dist = np.linalg.norm(self.nodes[nodeID].point[0:2]-self.nodes[childID].point[0:2])
+                    #self.nodes[childID].cost = self.nodes[nodeID].cost + dist
+        plt.show()
+        return
+
 def main():
     #Set map information
     # map_filename = "simple_map.png"
@@ -1090,9 +1135,10 @@ def main():
     # time.sleep(1)
 
     start = time.time()
-    nodes = path_planner.rrt_star_planning()
-    # nodes = path_planner.rrt_planning()
+    # nodes = path_planner.rrt_star_planning()
+    nodes = path_planner.rrt_planning()
     print(time.time()-start)
+    path_planner.plot_connection()
     
     node_path_metric = np.hstack(path_planner.recover_path())
     plt.figure()
