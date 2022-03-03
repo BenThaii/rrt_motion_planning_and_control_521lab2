@@ -54,11 +54,15 @@ class PathPlanner:
 
         #Get the metric bounds of the map
         self.bounds = np.zeros([2,2]) #m
-        self.bounds[0, 0] = self.map_settings_dict["origin"][0]
-        self.bounds[1, 0] = self.map_settings_dict["origin"][1]
+        # self.bounds[0, 0] = self.map_settings_dict["origin"][0]
+        # self.bounds[1, 0] = self.map_settings_dict["origin"][1]
+        # self.bounds[0, 1] = self.map_settings_dict["origin"][0] + self.map_shape[0] * self.map_settings_dict["resolution"]
+        # self.bounds[1, 1] = self.map_settings_dict["origin"][1] + self.map_shape[1] * self.map_settings_dict["resolution"]
+        self.bounds[0, 0] = self.map_settings_dict["origin"][0] + 400 * self.map_settings_dict["resolution"]
+        self.bounds[1, 0] = self.map_settings_dict["origin"][1] + 400 * self.map_settings_dict["resolution"]
         self.bounds[0, 1] = self.map_settings_dict["origin"][0] + self.map_shape[0] * self.map_settings_dict["resolution"]
         self.bounds[1, 1] = self.map_settings_dict["origin"][1] + self.map_shape[1] * self.map_settings_dict["resolution"]
-
+        
         
         #Robot information
         self.robot_radius = 0.22 #m
@@ -1135,8 +1139,8 @@ def main():
     # time.sleep(1)
 
     start = time.time()
-    # nodes = path_planner.rrt_star_planning()
-    nodes = path_planner.rrt_planning()
+    nodes = path_planner.rrt_star_planning()
+    # nodes = path_planner.rrt_planning()
     print(time.time()-start)
     path_planner.plot_connection()
     
